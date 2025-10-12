@@ -99,7 +99,6 @@ impl <T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                             consumer_idx = consumer_idx + slic.len() as i64;
                             consumer.consume(slic);
                         }
-                        // thread::sleep(Duration::from_millis(20));
                     }
                 });
             }
@@ -146,17 +145,17 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct TestConsumer {}
+    struct TestConsumer {id: i32}
 
     impl Consumer<i32> for TestConsumer {
         fn consume(&self, data: &[i32]) -> () {
-            println!("{:?}", data);
+            println!("{:?} read {:?}", self.id, data);
         }
     }
     unsafe impl Send for TestConsumer{}
 
     #[test]
-    fn single_prod_single_cons() -> () {
+    fn single_prod_multi_cons() -> () {
         /*
         Flow
         Register Producer gives R[T], which allows register consumers,
@@ -168,8 +167,10 @@ mod tests {
         let mut g: Graph<i32, TestConsumer> = Graph::new();
         let handler = g.register_producer();
 
-        let consumer = TestConsumer{};
-        handler.register_consumer(& mut g, consumer);
+        let consumer0 = TestConsumer{id: 0};
+        let consumer1 = TestConsumer{id: 1};
+        handler.register_consumer(& mut g, consumer0);
+        handler.register_consumer(& mut g, consumer1);
 
         println!("{:#?}", g.consumers);
         println!("{:#?}", g.consumers_deps);
@@ -180,7 +181,7 @@ mod tests {
 
         let handle1 = thread::spawn(move|| {
             for n in 1..10 {
-                g1.produce(vec![n]);
+                g1.produce(vec![n;n as usize]);
                 thread::sleep(Duration::from_millis(5));
             }
         });
@@ -189,7 +190,7 @@ mod tests {
         });
 
         handle1.join();
-        thread::sleep(Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(100));
     }
 
     struct TestStatic {
