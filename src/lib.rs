@@ -4,10 +4,11 @@
 pub mod test_utils;
 
 use std::cell::SyncUnsafeCell;
+use std::cmp::min;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 const RING_SIZE: usize = 1024;
@@ -52,42 +53,68 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
     fn produce(&self, data: Vec<T>) -> () {
         /*
         We can assume single producer, enforced by exclusion ref
-        1. Ensure we have enough space to write, valid if no other indices smaller than prod idx + data size - DATA_SIZE
-        2. Write
-        3. Advance index, this is safe as there's no other producer for now
+
+        caller might give us a batch larger than we can process, we might have to wrap the buffer in
+        write, and be careful not to lap consumer on each write
+        we should break input into chunks
+
+        this will try to write data in a loop:
+        1. Find out available space to write
+            - cannot overlap any consumer
+            - cannot lap the buffer array
+        1. Determine the slice to write, starting from 0..n where n is the largest index that's empty
+        1. slice progress by n on each loop, break when start = n
         */
+
         // by convention, 1st index is producer's
-        let producer_idx = self.consumable_indices.get(0);
-
-        let mut cur_idx = producer_idx.unwrap().load(Ordering::Acquire);
-
-        let new_idx = cur_idx + data.len();
+        let mut producer_idx = self
+            .consumable_indices
+            .get(0)
+            .unwrap()
+            .load(Ordering::Acquire);
+        // no of element written, cannot exceed data.len()
+        let mut data_written = 0;
         loop {
-            let has_conflict = self.consumer_indices
-                .iter()
-                .any(|idx| new_idx - idx.load(Ordering::Acquire) >= RING_SIZE);
-            if !has_conflict {
-                // todo: bug when write wrap
-                // given N data
-                // given remaining slot = RING_SIZE - cur_idx
-                // write slot data, update N = N - slot
-                // we also need to consider about writing without lapping consumer
+            // println!("Written {:?}", data_written);
+            if data_written + 1 >= data.len() {
+                break;
+            } else {
+                let mut consumer_low_watermark = *&self.consumer_indices[0].load(Ordering::Acquire);
+                for ci in &self.consumer_indices[1..] {
+                    let i = ci.load(Ordering::Acquire);
+                    if consumer_low_watermark > i {
+                        consumer_low_watermark = i;
+                    }
+                }
 
-                let data_size = data.len();
-                let start_idx = cur_idx % RING_SIZE;
-                self.write(start_idx, data);
+                // every write can not write beyond the buffer, we can wrap but that should be broken into
+                // separate write
+                let space_until_end_of_buffer = RING_SIZE - (producer_idx % RING_SIZE);
+
+                let space_until_low_watermark = consumer_low_watermark + RING_SIZE - producer_idx;
+
+                let available_write_size =
+                    min(space_until_end_of_buffer, space_until_low_watermark);
+
+                let write_range_end = min(data.len(), data_written + available_write_size);
+                self.write(
+                    producer_idx % RING_SIZE,
+                    &data[data_written..write_range_end],
+                );
+                let written_slice_size = write_range_end - data_written;
+
                 self.consumable_indices
                     .get(0)
                     .unwrap()
-                    .fetch_add(data_size, Ordering::Release);
-                break;
-            } else {
-                // todo: backoff strategy
-                // thread::sleep(Duration::from_millis(500));
+                    .fetch_add(written_slice_size, Ordering::Release);
+
+                //todo: does avoiding Atomic load make it faster?
+                producer_idx = producer_idx + written_slice_size;
+                data_written += written_slice_size;
             }
         }
     }
-    fn write(&self, from_idx: usize, data: Vec<T>) -> () {
+    fn write(&self, from_idx: usize, data: &[T]) -> () {
         // caller ensure the range (ie. from_idx .. from_idx + data.len()) is mutually exclusive
         // with other access
         let ptr = self.inner.get();
@@ -98,11 +125,11 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
         }
     }
 
-    fn read_data(&self, from_idx: usize, to_idx: usize) -> &[T] {
+    fn read_data(&self, from_idx: usize, read_ln: usize) -> &[T] {
         let ptr = self.inner.get();
         unsafe {
             let slice = (*ptr).as_ptr().add(from_idx) as *const T;
-            std::slice::from_raw_parts(slice, to_idx - from_idx)
+            std::slice::from_raw_parts(slice, read_ln)
         }
     }
 
@@ -128,18 +155,19 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                                 break;
                             }
                         }
-                        let upstream_load = upstream.load(Ordering::Acquire);
-                        if *consumer_idx < upstream_load {
+                        let upstream_written = upstream.load(Ordering::Acquire);
+                        // println!("upstream at {:?}", upstream_written);
+                        if *consumer_idx < upstream_written {
                             let starting: usize = consumer_idx % RING_SIZE;
-                            let end: usize = upstream_load % RING_SIZE;
+                            let end: usize = upstream_written % RING_SIZE;
 
-                            if end < starting {
-                                let slic = self.read_data(starting, RING_SIZE - 1);
+                            if end <= starting {
+                                let slic = self.read_data(starting, RING_SIZE - starting);
                                 consumer.consume(slic);
                                 let slic = self.read_data(0, end);
                                 consumer.consume(slic);
                             } else {
-                                let slic = self.read_data(starting, end);
+                                let slic = self.read_data(starting, end - starting);
                                 consumer.consume(slic);
                             }
                         }
@@ -195,10 +223,10 @@ pub trait Transformer<T> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{thread, time};
-    use std::sync::{Arc, Mutex};
-    use test_utils::*;
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::{thread, time};
+    use test_utils::*;
     #[test]
     pub fn single_prod_multi_cons() -> () {
         single_prod_multi_cons_run()

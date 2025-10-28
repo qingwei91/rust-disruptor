@@ -37,8 +37,8 @@ pub fn single_prod_multi_cons_run() -> () {
         each producer run on 1 thread
         each consumer run on 1 thread
     */
-    const NO_OF_BATCH: usize = 10_000usize;
-    const BATCH_SIZE: usize = 1_000usize;
+    const NO_OF_BATCH: usize = 100_000usize;
+    const BATCH_SIZE: usize = 2043;
     const NO_OF_REC: usize = NO_OF_BATCH * BATCH_SIZE;
     let mut g: Graph<i32, TestConsumer> = Graph::new();
     let handler = g.register_producer();
@@ -64,5 +64,6 @@ pub fn single_prod_multi_cons_run() -> () {
         g2.run(Some(NO_OF_REC));
     });
 
-    handle2.join();
+    producer.join().unwrap();
+    handle2.join().unwrap();
 }
