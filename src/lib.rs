@@ -1,5 +1,4 @@
 #![feature(sync_unsafe_cell)]
-#![feature(maybe_uninit_uninit_array)]
 
 pub mod test_utils;
 
@@ -30,7 +29,7 @@ pub struct Graph<T: Copy, CS: Consumer<T> + Send> {
 
 impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
     fn new() -> Graph<T, CS> {
-        let data: [MaybeUninit<T>; RING_SIZE] = MaybeUninit::uninit_array();
+        let data: [MaybeUninit<T>; RING_SIZE] = [const { MaybeUninit::uninit() }; RING_SIZE];
         let inner = SyncUnsafeCell::new(data);
         Graph {
             consumable_indices: vec![],
