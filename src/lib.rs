@@ -9,6 +9,7 @@ use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 const RING_SIZE: usize = 1024;
 
@@ -28,7 +29,7 @@ pub struct Graph<T: Copy, CS: Consumer<T> + Send> {
 }
 
 impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
-    fn new() -> Graph<T, CS> {
+    pub fn new() -> Graph<T, CS> {
         let data: [MaybeUninit<T>; RING_SIZE] = [const { MaybeUninit::uninit() }; RING_SIZE];
         let inner = SyncUnsafeCell::new(data);
         Graph {
@@ -41,7 +42,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
             inner: Arc::new(inner),
         }
     }
-    fn register_producer(&mut self) -> RegistrationHandle<T> {
+    pub fn register_producer(&mut self) -> RegistrationHandle<T> {
         self.consumable_indices.push(AtomicUsize::new(0));
         RegistrationHandle {
             upstream_index: 0,
@@ -49,7 +50,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
         }
     }
 
-    fn produce(&self, data: Vec<T>) -> () {
+    fn produce(&self, data: &Vec<T>) -> () {
         /*
         We can assume single producer, enforced by exclusion ref
 
@@ -110,6 +111,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                 //todo: does avoiding Atomic load make it faster?
                 producer_idx = producer_idx + written_slice_size;
                 data_written += written_slice_size;
+                // thread::sleep(Duration::from_millis(1))
             }
         }
     }
@@ -171,7 +173,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                             }
                         }
                         // todo: backoff strategy
-                        // thread::sleep(Duration::from_millis(10));
+                        // thread::sleep(Duration::from_millis(1));
                     }
                 });
             }
@@ -185,7 +187,7 @@ pub struct RegistrationHandle<T> {
 }
 
 impl<T: Copy> RegistrationHandle<T> {
-    fn register_consumer<CS: Consumer<T> + Send>(
+    pub fn register_consumer<CS: Consumer<T> + Send>(
         &self,
         graph: &mut Graph<T, CS>,
         consumer: CS,

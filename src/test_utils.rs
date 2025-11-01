@@ -4,13 +4,13 @@ use std::thread;
 use crate::{Consumer, Graph};
 
 #[derive(Debug)]
-struct TestConsumer {
+pub struct TestConsumer {
     id: i32,
     idx: Arc<AtomicUsize>,
 }
 
 impl TestConsumer {
-    fn new(consumer_id: i32) -> TestConsumer {
+    pub fn new(consumer_id: i32) -> TestConsumer {
         TestConsumer{id: consumer_id, idx: Arc::new(AtomicUsize::new(0))}
     }
 }
@@ -26,19 +26,9 @@ impl Consumer<i32> for TestConsumer {
 }
 unsafe impl Send for TestConsumer {}
 
-
-
-pub fn single_prod_multi_cons_run() -> () {
-    /*
-    Flow
-    Register Producer gives R[T], which allows register consumers,
-    can have concurrent consumers
-    when start:
-        each producer run on 1 thread
-        each consumer run on 1 thread
-    */
-    const NO_OF_BATCH: usize = 10_000_000usize;
-    const BATCH_SIZE: usize = 2;
+pub fn setup_data() -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
+    const NO_OF_BATCH: usize = 10_000usize;
+    const BATCH_SIZE: usize = 2000;
     const NO_OF_REC: usize = NO_OF_BATCH * BATCH_SIZE;
     let mut g: Graph<i32, TestConsumer> = Graph::new();
     let handler = g.register_producer();
@@ -50,22 +40,43 @@ pub fn single_prod_multi_cons_run() -> () {
     handler.register_consumer(&mut g, consumer1);
     handler.register_consumer(&mut g, consumer2);
 
-    // println!("{:#?}", g.consumers);
-    // println!("{:#?}", g.consumers_deps);
-    // println!("{:#?}", g.consumable_indices);
+    let mut test_data = Vec::with_capacity(NO_OF_BATCH);
+    for n in 0..NO_OF_BATCH {
+        test_data.push(vec![n as i32; BATCH_SIZE]);
+    };
 
-    let g1 = Arc::new(g);
-    let g2 = Arc::clone(&g1);
+    return (g, test_data, NO_OF_REC)
+}
 
-    let producer = thread::spawn(move || {
-        for n in 0..NO_OF_BATCH {
-            g1.produce(vec![n as i32; BATCH_SIZE]);
-        }
-    });
-    let handle2 = thread::spawn(move || {
-        g2.run(Some(NO_OF_REC));
-    });
+pub fn single_prod_multi_cons_run() -> () {
+    /*
+    Flow
+    Register Producer gives R[T], which allows register consumers,
+    can have concurrent consumers
+    when start:
+        each producer run on 1 thread
+        each consumer run on 1 thread
+    */
+    let a = setup_data();
+    test_produce_consume(Arc::new(a.0), &a.1, a.2);
+}
 
-    producer.join().unwrap();
-    handle2.join().unwrap();
+pub fn test_produce_consume(graph: Arc<Graph<i32, TestConsumer>>, test_data: & Vec<Vec<i32>>, total_n: usize) -> () {
+    let g2 = Arc::clone(&graph);
+
+    thread::scope(|s| {
+        let producer = s.spawn(|| {
+            for vec in test_data {
+                graph.produce(vec);
+            }
+        });
+        let handle2 = s.spawn(move || {
+            g2.run(Some(total_n));
+        });
+
+        producer.join().unwrap();
+        handle2.join().unwrap();
+
+    })
+
 }
