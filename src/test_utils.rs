@@ -27,8 +27,8 @@ impl Consumer<i32> for TestConsumer {
 unsafe impl Send for TestConsumer {}
 
 pub fn setup_data() -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
-    const NO_OF_BATCH: usize = 10_000usize;
-    const BATCH_SIZE: usize = 2000;
+    const NO_OF_BATCH: usize = 10_000_000usize;
+    const BATCH_SIZE: usize = 2;
     const NO_OF_REC: usize = NO_OF_BATCH * BATCH_SIZE;
     let mut g: Graph<i32, TestConsumer> = Graph::new();
     let handler = g.register_producer();
