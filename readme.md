@@ -48,3 +48,9 @@ can pushes 10000 batches of 2000 elements and consume them all in about 90ms.
 
 Caveat is the current interface act on batch of data, ie. &Vec<T>, which is more efficient when copying in and out array 
 but might not work as well for single element access pattern. 
+
+# Next:
+
+1. Implement bench with different variations on size of message, no of message
+1. Implement chaining of processes
+2. Implement padding to avoid false sharing

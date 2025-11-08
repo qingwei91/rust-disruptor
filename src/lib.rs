@@ -1,7 +1,5 @@
 #![feature(sync_unsafe_cell)]
 
-pub mod test_utils;
-
 use std::cell::SyncUnsafeCell;
 use std::cmp::min;
 use std::marker::PhantomData;
@@ -9,7 +7,10 @@ use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+
+use log;
+use env_logger;
+pub mod test_utils;
 
 const RING_SIZE: usize = 1024;
 
@@ -67,16 +68,13 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
         */
 
         // by convention, 1st index is producer's
-        let mut producer_idx = self
-            .consumable_indices
-            .get(0)
-            .unwrap()
-            .load(Ordering::Acquire);
+        let mut producer_idx = self.consumable_indices.get(0).unwrap().load(Ordering::Acquire);
         // no of element written, cannot exceed data.len()
         let mut data_written = 0;
         loop {
-            // println!("Written {:?}", data_written);
+            // todo: bug???!!!
             if data_written + 1 >= data.len() {
+                log::debug!("Finished written {:?} data", data_written);
                 break;
             } else {
                 let mut consumer_low_watermark = *&self.consumer_indices[0].load(Ordering::Acquire);
@@ -93,14 +91,11 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
 
                 let space_until_low_watermark = consumer_low_watermark + RING_SIZE - producer_idx;
 
-                let available_write_size =
-                    min(space_until_end_of_buffer, space_until_low_watermark);
+                let available_write_size = min(space_until_end_of_buffer, space_until_low_watermark);
 
                 let write_range_end = min(data.len(), data_written + available_write_size);
-                self.write(
-                    producer_idx % RING_SIZE,
-                    &data[data_written..write_range_end],
-                );
+                self.write(producer_idx % RING_SIZE, &data[data_written..write_range_end]);
+                log::debug!("Written {:?}", write_range_end);
                 let written_slice_size = write_range_end - data_written;
 
                 self.consumable_indices
@@ -157,7 +152,6 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                             }
                         }
                         let upstream_written = upstream.load(Ordering::Acquire);
-                        // println!("upstream at {:?}", upstream_written);
                         if *consumer_idx < upstream_written {
                             let starting: usize = consumer_idx % RING_SIZE;
                             let end: usize = upstream_written % RING_SIZE;
@@ -171,6 +165,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                                 let slic = self.read_data(starting, end - starting);
                                 consumer.consume(slic);
                             }
+                            log::debug!("{:?} read until {:?}", i, upstream_written);
                         }
                         // todo: backoff strategy
                         // thread::sleep(Duration::from_millis(1));
@@ -187,11 +182,7 @@ pub struct RegistrationHandle<T> {
 }
 
 impl<T: Copy> RegistrationHandle<T> {
-    pub fn register_consumer<CS: Consumer<T> + Send>(
-        &self,
-        graph: &mut Graph<T, CS>,
-        consumer: CS,
-    ) -> () {
+    pub fn register_consumer<CS: Consumer<T> + Send>(&self, graph: &mut Graph<T, CS>, consumer: CS) -> () {
         graph.consumer_indices.push(consumer.get_idx());
         graph.consumers.push(Box::new(consumer));
         graph.consumers_deps.push(self.upstream_index);
@@ -224,12 +215,16 @@ pub trait Transformer<T> {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
     use std::sync::{Arc, Mutex};
     use std::{thread, time};
+
     use test_utils::*;
+
+    use super::*;
+
     #[test]
     pub fn single_prod_multi_cons() -> () {
+        env_logger::init();
         single_prod_multi_cons_run()
     }
 
@@ -246,13 +241,9 @@ pub mod tests {
     #[test]
     fn test_static_lifetime() -> () {
         {
-            TestStatic {
-                i: "Inner dropped 1st",
-            };
+            TestStatic { i: "Inner dropped 1st" };
         }
-        let _ = TestStatic {
-            i: "out dropped last",
-        };
+        let _ = TestStatic { i: "out dropped last" };
         println!("In bettweeen");
     }
 

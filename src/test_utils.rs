@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use crate::{Consumer, Graph};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
 
 #[derive(Debug)]
 pub struct TestConsumer {
@@ -11,7 +11,10 @@ pub struct TestConsumer {
 
 impl TestConsumer {
     pub fn new(consumer_id: i32) -> TestConsumer {
-        TestConsumer{id: consumer_id, idx: Arc::new(AtomicUsize::new(0))}
+        TestConsumer {
+            id: consumer_id,
+            idx: Arc::new(AtomicUsize::new(0)),
+        }
     }
 }
 
@@ -26,10 +29,11 @@ impl Consumer<i32> for TestConsumer {
 }
 unsafe impl Send for TestConsumer {}
 
-pub fn setup_data() -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
-    const NO_OF_BATCH: usize = 10_000_000usize;
-    const BATCH_SIZE: usize = 2;
-    const NO_OF_REC: usize = NO_OF_BATCH * BATCH_SIZE;
+pub fn setup_data(
+    no_of_batch: usize,
+    batch_size: usize,
+) -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
+    let no_of_rec: usize = no_of_batch * batch_size;
     let mut g: Graph<i32, TestConsumer> = Graph::new();
     let handler = g.register_producer();
 
@@ -40,12 +44,12 @@ pub fn setup_data() -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
     handler.register_consumer(&mut g, consumer1);
     handler.register_consumer(&mut g, consumer2);
 
-    let mut test_data = Vec::with_capacity(NO_OF_BATCH);
-    for n in 0..NO_OF_BATCH {
-        test_data.push(vec![n as i32; BATCH_SIZE]);
-    };
+    let mut test_data = Vec::with_capacity(no_of_batch);
+    for n in 0..no_of_batch {
+        test_data.push(vec![n as i32; batch_size]);
+    }
 
-    return (g, test_data, NO_OF_REC)
+    return (g, test_data, no_of_rec);
 }
 
 pub fn single_prod_multi_cons_run() -> () {
@@ -57,11 +61,15 @@ pub fn single_prod_multi_cons_run() -> () {
         each producer run on 1 thread
         each consumer run on 1 thread
     */
-    let a = setup_data();
+    let a = setup_data(1, 1);
     test_produce_consume(Arc::new(a.0), &a.1, a.2);
 }
 
-pub fn test_produce_consume(graph: Arc<Graph<i32, TestConsumer>>, test_data: & Vec<Vec<i32>>, total_n: usize) -> () {
+pub fn test_produce_consume(
+    graph: Arc<Graph<i32, TestConsumer>>,
+    test_data: &Vec<Vec<i32>>,
+    total_n: usize,
+) -> () {
     let g2 = Arc::clone(&graph);
 
     thread::scope(|s| {
@@ -76,7 +84,5 @@ pub fn test_produce_consume(graph: Arc<Graph<i32, TestConsumer>>, test_data: & V
 
         producer.join().unwrap();
         handle2.join().unwrap();
-
     })
-
 }
