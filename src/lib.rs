@@ -7,6 +7,7 @@ use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use log;
 use env_logger;
@@ -27,6 +28,13 @@ pub struct Graph<T: Copy, CS: Consumer<T> + Send> {
     consumers_deps: Vec<usize>,
     transformers_deps: Vec<usize>,
     inner: Arc<SyncUnsafeCell<[MaybeUninit<T>; RING_SIZE]>>,
+}
+
+#[derive(Copy, Clone)]
+pub enum BackoffStrategy {
+    Spin,
+    FixedSleep(Duration),
+    SpinThenSleep(u8, Duration)
 }
 
 impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
@@ -130,7 +138,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
     }
 
     // making a choice of static graph, once you run nothing can be done
-    fn run(&self, stop_after_consume: Option<usize>) -> () {
+    fn run_with_backoff(&self, stop_after_consume: Option<usize>, backoff_strategy: BackoffStrategy) -> () {
         thread::scope(|s| {
             /*
                 For each consumer, we need
@@ -144,6 +152,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                 let consumer = self.consumers.get(i).unwrap();
                 // let con_idx = self.consumer_indices[i];
                 s.spawn(move || {
+                    let mut backoff_count = 0;
                     loop {
                         let consumer_idx = &self.consumer_indices[i].load(Ordering::Acquire);
                         if let Some(i) = stop_after_consume {
@@ -166,13 +175,30 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                                 consumer.consume(slic);
                             }
                             log::debug!("{:?} read until {:?}", i, upstream_written);
+                            backoff_count = 0;
+                        } else {
+                            match backoff_strategy {
+                                BackoffStrategy::Spin => {}
+                                BackoffStrategy::FixedSleep(sleep_dur) => {
+                                    thread::sleep(sleep_dur);
+                                }
+                                BackoffStrategy::SpinThenSleep(count, sleep_dur) => {
+                                    if count > backoff_count {
+                                        backoff_count+=1;
+                                    } else {
+                                        thread::sleep(sleep_dur);
+                                    }
+                                }
+                            }
                         }
-                        // todo: backoff strategy
-                        // thread::sleep(Duration::from_millis(1));
                     }
                 });
             }
         })
+    }
+
+    fn run(&self, stop_after_consume: Option<usize>) -> () {
+        self.run_with_backoff(stop_after_consume, BackoffStrategy::Spin)
     }
 }
 
