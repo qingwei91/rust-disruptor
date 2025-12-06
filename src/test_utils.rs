@@ -19,12 +19,9 @@ impl TestConsumer {
 }
 
 impl Consumer<i32> for TestConsumer {
-    fn consume(&self, data: &[i32]) -> () {
+    fn consume(&mut self, data: &[i32]) -> () {
         let ln = data.len();
         self.idx.fetch_add(ln, Ordering::Release);
-    }
-    fn get_idx(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.idx)
     }
 }
 unsafe impl Send for TestConsumer {}

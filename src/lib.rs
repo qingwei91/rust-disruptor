@@ -1,7 +1,8 @@
 #![feature(sync_unsafe_cell)]
 
-use std::cell::SyncUnsafeCell;
+use std::cell::{SyncUnsafeCell, UnsafeCell};
 use std::cmp::min;
+use std::io::BufRead;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,7 +21,7 @@ pub struct Graph<T: Copy, CS: Consumer<T> + Send> {
     // we need consumer's indices shared because producer need to check for bounds
     consumer_indices: Vec<Arc<AtomicUsize>>,
     // we can use another generic with trait bound to model consumer + transformer, not sure if better
-    consumers: Vec<Box<CS>>,
+    consumers: Vec<SyncUnsafeCell<Box<CS>>>,
     transformers: Vec<Box<dyn Transformer<T> + Send + Sync>>,
     // these 2 vecs represent the dependency of consumer/transformer respectively
     // eg consumer_deps = vec![0,2] means 1st consumer depends on index on 0, 2nd consumer depends on index 2
@@ -149,7 +150,7 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
             for i in 0..self.consumers.len() {
                 let consumer_deps_idx: &usize = self.consumers_deps.get(i).unwrap();
                 let upstream = self.consumable_indices.get(*consumer_deps_idx).unwrap();
-                let consumer = self.consumers.get(i).unwrap();
+                let consumer = unsafe { &mut *self.consumers.get(i).unwrap().get() };
                 // let con_idx = self.consumer_indices[i];
                 s.spawn(move || {
                     let mut backoff_count = 0;
@@ -209,8 +210,8 @@ pub struct RegistrationHandle<T> {
 
 impl<T: Copy> RegistrationHandle<T> {
     pub fn register_consumer<CS: Consumer<T> + Send>(&self, graph: &mut Graph<T, CS>, consumer: CS) -> () {
-        graph.consumer_indices.push(consumer.get_idx());
-        graph.consumers.push(Box::new(consumer));
+        graph.consumer_indices.push(Arc::new(AtomicUsize::new(0)));
+        graph.consumers.push(SyncUnsafeCell::new(Box::new(consumer)));
         graph.consumers_deps.push(self.upstream_index);
     }
     fn register_transformer<CS: Consumer<T> + Send>(
@@ -231,8 +232,7 @@ pub trait Consumer<T> {
     // we are giving a slice, meaning actual consume might need to dereference and cause copy
     // remained to be seen if its okay
     // the contract also expect consume method to advance the idx
-    fn consume(&self, data: &[T]) -> ();
-    fn get_idx(&self) -> Arc<AtomicUsize>;
+    fn consume(&mut self, data: &[T]) -> ();
 }
 
 pub trait Transformer<T> {
