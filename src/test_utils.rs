@@ -1,4 +1,4 @@
-use crate::{Consumer, Graph};
+use crate::{Consumer, Graph, Transformer};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -26,12 +26,22 @@ impl Consumer<i32> for TestConsumer {
 }
 unsafe impl Send for TestConsumer {}
 
+struct TestTranformer;
+
+impl Transformer<i32> for TestTranformer {
+    fn transform(&mut self, data: &[i32]) -> Vec<i32> {
+        todo!()
+    }
+}
+
+unsafe impl Send for TestTranformer {}
+
 pub fn setup_data(
     no_of_batch: usize,
     batch_size: usize,
-) -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
+) -> (Graph<i32, TestConsumer, TestTranformer>, Vec<Vec<i32>>, usize) {
     let no_of_rec: usize = no_of_batch * batch_size;
-    let mut g: Graph<i32, TestConsumer> = Graph::new();
+    let mut g: Graph<i32, TestConsumer, TestTranformer> = Graph::new();
     let handler = g.register_producer();
 
     let consumer0 = TestConsumer::new(0);
@@ -63,7 +73,7 @@ pub fn single_prod_multi_cons_run() -> () {
 }
 
 pub fn test_produce_consume(
-    graph: Arc<Graph<i32, TestConsumer>>,
+    graph: Arc<Graph<i32, TestConsumer, TestTranformer>>,
     test_data: &Vec<Vec<i32>>,
     total_n: usize,
 ) -> () {
