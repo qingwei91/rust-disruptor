@@ -15,20 +15,17 @@ pub mod test_utils;
 
 const RING_SIZE: usize = 1024;
 
-pub struct Graph<T: Copy, CS: Consumer<T> + Send, TS: Transformer<T> + Send> {
+pub struct Graph<T: Copy, CS: Consumer<T> + Send> {
     // consumable refers to nodes that produces data, producers and transformers
     consumable_indices: Vec<AtomicUsize>,
     // consumer's indices shared because producer need to check for bounds
     consumer_indices: Vec<Arc<AtomicUsize>>,
-    tranformer_indices: Vec<Arc<AtomicUsize>>,
     // we can use another generic with trait bound to model consumer + transformer, not sure if better
     consumers: Vec<SyncUnsafeCell<Box<CS>>>,
-    transformers: Vec<SyncUnsafeCell<Box<TS>>>,
     // these 2 vecs represent the dependency of consumer/transformer respectively
     // eg consumer_deps = vec![0,2] means 1st consumer depends on index on 0, 2nd consumer depends on index 2
     // the general logic
     consumers_deps: Vec<usize>,
-    transformers_deps: Vec<usize>,
     inner: Arc<SyncUnsafeCell<[MaybeUninit<T>; RING_SIZE]>>,
 }
 
@@ -39,18 +36,15 @@ pub enum BackoffStrategy {
     SpinThenSleep(u8, Duration),
 }
 
-impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync, TS: Transformer<T> + Send + Sync> Graph<T, CS, TS> {
-    pub fn new() -> Graph<T, CS, TS> {
+impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
+    pub fn new() -> Graph<T, CS> {
         let data: [MaybeUninit<T>; RING_SIZE] = [const { MaybeUninit::uninit() }; RING_SIZE];
         let inner = SyncUnsafeCell::new(data);
         Graph {
             consumable_indices: vec![],
             consumer_indices: vec![],
-            tranformer_indices: vec![],
             consumers: vec![],
-            transformers: vec![],
             consumers_deps: vec![],
-            transformers_deps: vec![],
             inner: Arc::new(inner),
         }
     }
@@ -197,10 +191,6 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync, TS: Transformer<T> + 
                     }
                 });
             }
-
-            for i in 0..self.transformers.len() {
-
-            }
         })
     }
 
@@ -215,22 +205,11 @@ pub struct RegistrationHandle<T> {
 }
 
 impl<T: Copy> RegistrationHandle<T> {
-    pub fn register_consumer<CS: Consumer<T> + Send, TS: Transformer<T> + Send>(&self, graph: &mut Graph<T, CS, TS>, consumer: CS) -> () {
+    pub fn register_consumer<CS: Consumer<T> + Send>(&self, graph: &mut Graph<T, CS>, consumer: CS) -> RegistrationHandle<T> {
         graph.consumer_indices.push(Arc::new(AtomicUsize::new(0)));
         graph.consumers.push(SyncUnsafeCell::new(Box::new(consumer)));
         graph.consumers_deps.push(self.upstream_index);
-    }
-    fn register_transformer<CS: Consumer<T> + Send, TS: Transformer<T> + Send>(
-        &self,
-        graph: &mut Graph<T, CS, TS>,
-        transformer: TS,
-    ) -> Self {
-        graph.transformers.push(SyncUnsafeCell::new(Box::new(transformer)));
-        graph.transformers_deps.push(self.upstream_index);
-        RegistrationHandle {
-            upstream_index: graph.transformers.len() - 1,
-            d: PhantomData {},
-        }
+        todo!()
     }
 }
 
@@ -239,10 +218,6 @@ pub trait Consumer<T> {
     // remained to be seen if its okay
     // the contract also expect consume method to advance the idx
     fn consume(&mut self, data: &[T]) -> ();
-}
-
-pub trait Transformer<T> {
-    fn transform(&mut self, data: &[T]) -> Vec<T>;
 }
 
 #[cfg(test)]
