@@ -77,8 +77,8 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
         // no of element written, cannot exceed data.len()
         let mut data_written = 0;
         loop {
-            // todo: bug???!!!
-            if data_written + 1 >= data.len() {
+            // todo: bug, if data is len 1 this does not work
+            if data_written >= data.len() {
                 log::debug!("Finished written {:?} data", data_written);
                 break;
             } else {
@@ -165,12 +165,17 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                             if end <= starting {
                                 let slic = self.read_data(starting, RING_SIZE - starting);
                                 consumer.consume(slic);
+                                let mut consumed = slic.len();
                                 let slic = self.read_data(0, end);
                                 consumer.consume(slic);
+                                consumed += slic.len();
+                                self.consumer_indices[i].fetch_add(consumed, Ordering::Release);
                             } else {
                                 let slic = self.read_data(starting, end - starting);
                                 consumer.consume(slic);
+                                self.consumer_indices[i].fetch_add(slic.len(), Ordering::Release);
                             }
+
                             log::debug!("{:?} read until {:?}", i, upstream_written);
                             backoff_count = 0;
                         } else {
@@ -209,7 +214,10 @@ impl<T: Copy> RegistrationHandle<T> {
         graph.consumer_indices.push(Arc::new(AtomicUsize::new(0)));
         graph.consumers.push(SyncUnsafeCell::new(Box::new(consumer)));
         graph.consumers_deps.push(self.upstream_index);
-        todo!()
+        RegistrationHandle {
+            upstream_index: graph.consumers.len() - 1,
+            d: PhantomData,
+        }
     }
 }
 
