@@ -46,10 +46,33 @@ pub fn setup_data(
         test_data.push(vec![n as i32; batch_size]);
     }
 
+    (g, test_data, no_of_rec)
+}
+
+pub fn setup_consumer_deps(
+    no_of_batch: usize,
+    batch_size: usize,
+) -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
+    let no_of_rec: usize = no_of_batch * batch_size;
+    let mut g: Graph<i32, TestConsumer> = Graph::new();
+    let handler = g.register_producer();
+
+    let consumer0 = TestConsumer::new(0);
+    let consumer1 = TestConsumer::new(1);
+    let consumer2 = TestConsumer::new(2);
+    handler.register_consumer(&mut g, consumer0);
+    handler.register_consumer(&mut g, consumer1).register_consumer(&mut g, consumer2);
+
+    let mut test_data = Vec::with_capacity(no_of_batch);
+    for n in 0..no_of_batch {
+        test_data.push(vec![n as i32; batch_size]);
+    }
+
     return (g, test_data, no_of_rec);
 }
 
-pub fn single_prod_multi_cons_run() -> () {
+
+pub fn single_prod_multi_cons_run(no_of_batch: usize, batch_size: usize) -> () {
     /*
     Flow
     Register Producer gives R[T], which allows register consumers,
@@ -58,7 +81,7 @@ pub fn single_prod_multi_cons_run() -> () {
         each producer run on 1 thread
         each consumer run on 1 thread
     */
-    let a = setup_data(1, 1);
+    let a = setup_data(no_of_batch, batch_size);
     test_produce_consume(Arc::new(a.0), &a.1, a.2);
 }
 

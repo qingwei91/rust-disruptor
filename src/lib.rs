@@ -16,16 +16,14 @@ pub mod test_utils;
 const RING_SIZE: usize = 1024;
 
 pub struct Graph<T: Copy, CS: Consumer<T> + Send> {
-    // consumable refers to nodes that produces data, producers and transformers
+    // all indices
     consumable_indices: Vec<AtomicUsize>,
-    // consumer's indices shared because producer need to check for bounds
-    consumer_indices: Vec<Arc<AtomicUsize>>,
     // we can use another generic with trait bound to model consumer + transformer, not sure if better
     consumers: Vec<SyncUnsafeCell<Box<CS>>>,
     // these 2 vecs represent the dependency of consumer/transformer respectively
     // eg consumer_deps = vec![0,2] means 1st consumer depends on index on 0, 2nd consumer depends on index 2
     // the general logic
-    consumers_deps: Vec<usize>,
+    consumer_idx_upstream: Vec<(usize, usize)>,
     inner: Arc<SyncUnsafeCell<[MaybeUninit<T>; RING_SIZE]>>,
 }
 
@@ -42,9 +40,8 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
         let inner = SyncUnsafeCell::new(data);
         Graph {
             consumable_indices: vec![],
-            consumer_indices: vec![],
             consumers: vec![],
-            consumers_deps: vec![],
+            consumer_idx_upstream: vec![],
             inner: Arc::new(inner),
         }
     }
@@ -82,8 +79,8 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                 log::debug!("Finished written {:?} data", data_written);
                 break;
             } else {
-                let mut consumer_low_watermark = *&self.consumer_indices[0].load(Ordering::Acquire);
-                for ci in &self.consumer_indices[1..] {
+                let mut consumer_low_watermark = *&self.consumable_indices[1].load(Ordering::Acquire);
+                for ci in &self.consumable_indices[2..] {
                     let i = ci.load(Ordering::Acquire);
                     if consumer_low_watermark > i {
                         consumer_low_watermark = i;
@@ -144,14 +141,14 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                 3. else sleep
             */
             for i in 0..self.consumers.len() {
-                let consumer_deps_idx: &usize = self.consumers_deps.get(i).unwrap();
-                let upstream = self.consumable_indices.get(*consumer_deps_idx).unwrap();
+                let (c_idx, c_ups_idx) = self.consumer_idx_upstream.get(i).unwrap();
+                let upstream = self.consumable_indices.get(*c_ups_idx).unwrap();
                 let consumer: &mut CS = unsafe { &mut *self.consumers.get(i).unwrap().get() };
                 // let con_idx = self.consumer_indices[i];
                 s.spawn(move || {
                     let mut backoff_count = 0;
                     loop {
-                        let consumer_idx = &self.consumer_indices[i].load(Ordering::Acquire);
+                        let consumer_idx = &self.consumable_indices[*c_idx].load(Ordering::Acquire);
                         if let Some(i) = stop_after_consume {
                             if *consumer_idx >= i {
                                 break;
@@ -169,11 +166,11 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                                 let slic = self.read_data(0, end);
                                 consumer.consume(slic);
                                 consumed += slic.len();
-                                self.consumer_indices[i].fetch_add(consumed, Ordering::Release);
+                                self.consumable_indices[*c_idx].fetch_add(consumed, Ordering::Release);
                             } else {
                                 let slic = self.read_data(starting, end - starting);
                                 consumer.consume(slic);
-                                self.consumer_indices[i].fetch_add(slic.len(), Ordering::Release);
+                                self.consumable_indices[*c_idx].fetch_add(slic.len(), Ordering::Release);
                             }
 
                             log::debug!("{:?} read until {:?}", i, upstream_written);
@@ -211,11 +208,11 @@ pub struct RegistrationHandle<T> {
 
 impl<T: Copy> RegistrationHandle<T> {
     pub fn register_consumer<CS: Consumer<T> + Send>(&self, graph: &mut Graph<T, CS>, consumer: CS) -> RegistrationHandle<T> {
-        graph.consumer_indices.push(Arc::new(AtomicUsize::new(0)));
+        graph.consumable_indices.push(AtomicUsize::new(0));
         graph.consumers.push(SyncUnsafeCell::new(Box::new(consumer)));
-        graph.consumers_deps.push(self.upstream_index);
+        graph.consumer_idx_upstream.push((graph.consumable_indices.len() - 1, self.upstream_index));
         RegistrationHandle {
-            upstream_index: graph.consumers.len() - 1,
+            upstream_index: graph.consumable_indices.len() - 1,
             d: PhantomData,
         }
     }
@@ -240,8 +237,20 @@ pub mod tests {
     #[test]
     pub fn single_prod_multi_cons() -> () {
         env_logger::init();
-        single_prod_multi_cons_run()
+        single_prod_multi_cons_run(1, 1);
+        single_prod_multi_cons_run(100, 100);
     }
+
+    #[test]
+    pub fn single_prod_multi_cons_with_deps() -> () {
+        env_logger::init();
+        let a = setup_consumer_deps(1,1);
+        test_produce_consume(Arc::new(a.0), &a.1, a.2);
+
+        let a = setup_consumer_deps(100,100);
+        test_produce_consume(Arc::new(a.0), &a.1, a.2);
+    }
+
 
     struct TestStatic {
         i: &'static str,
