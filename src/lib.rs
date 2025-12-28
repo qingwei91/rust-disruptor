@@ -163,9 +163,11 @@ impl<T: Copy + Send + Sync, CS: Consumer<T> + Send + Sync> Graph<T, CS> {
                                 let slic = self.read_data(starting, RING_SIZE - starting);
                                 consumer.consume(slic);
                                 let mut consumed = slic.len();
-                                let slic = self.read_data(0, end);
-                                consumer.consume(slic);
-                                consumed += slic.len();
+                                if end != 0 {
+                                    let slic = self.read_data(0, end);
+                                    consumer.consume(slic);
+                                    consumed += slic.len();
+                                }
                                 self.consumable_indices[*c_idx].fetch_add(consumed, Ordering::Release);
                             } else {
                                 let slic = self.read_data(starting, end - starting);
@@ -229,7 +231,7 @@ pub trait Consumer<T> {
 pub mod tests {
     use std::sync::{Arc, Mutex};
     use std::{thread, time};
-
+    use std::collections::HashMap;
     use test_utils::*;
 
     use super::*;
@@ -249,6 +251,23 @@ pub mod tests {
 
         let a = setup_consumer_deps(100,100);
         test_produce_consume(Arc::new(a.0), &a.1, a.2);
+
+        let log = a.3.lock().unwrap();
+        let mut exp = HashMap::new();
+        exp.insert(0, 0);
+        exp.insert(1, 0);
+        exp.insert(2, 0);
+        println!("{:?}", log);
+        for (cid, idx) in log.iter() {
+
+            if *cid == 1 {
+                assert!(*idx <= *exp.get(&0).unwrap(), "cid 1 idx {} exp {}", idx, exp.get(&0).unwrap())
+            }
+            if *cid == 2 {
+                assert!(*idx <= *exp.get(&1).unwrap(), "cid 2 idx {} exp {}", idx, exp.get(&1).unwrap())
+            }
+            exp.insert(*cid, *idx);
+        }
     }
 
 

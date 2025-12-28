@@ -1,27 +1,29 @@
 use crate::{Consumer, Graph};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[derive(Debug)]
 pub struct TestConsumer {
     id: i32,
-    idx: Arc<AtomicUsize>,
+    internal_counter: usize,
+    log: Arc<Mutex<Vec<(i32, usize)>>>,
 }
 
 impl TestConsumer {
-    pub fn new(consumer_id: i32) -> TestConsumer {
+    pub fn new(consumer_id: i32, log: Arc<Mutex<Vec<(i32, usize)>>>) -> TestConsumer {
         TestConsumer {
             id: consumer_id,
-            idx: Arc::new(AtomicUsize::new(0)),
+            internal_counter: 0,
+            log: log,
         }
     }
 }
 
 impl Consumer<i32> for TestConsumer {
     fn consume(&mut self, data: &[i32]) -> () {
-        let ln = data.len();
-        self.idx.fetch_add(ln, Ordering::Release);
+        // assert!(data.len() > 0, "WHy empty");
+        self.internal_counter += data.len();
+        self.log.lock().unwrap().push((self.id, self.internal_counter));
     }
 }
 unsafe impl Send for TestConsumer {}
@@ -34,9 +36,11 @@ pub fn setup_data(
     let mut g: Graph<i32, TestConsumer> = Graph::new();
     let handler = g.register_producer();
 
-    let consumer0 = TestConsumer::new(0);
-    let consumer1 = TestConsumer::new(1);
-    let consumer2 = TestConsumer::new(2);
+    let sync_log = Arc::new(Mutex::new(Vec::new()));
+
+    let consumer0 = TestConsumer::new(0, Arc::clone(&sync_log));
+    let consumer1 = TestConsumer::new(1, Arc::clone(&sync_log));
+    let consumer2 = TestConsumer::new(2, Arc::clone(&sync_log));
     handler.register_consumer(&mut g, consumer0);
     handler.register_consumer(&mut g, consumer1);
     handler.register_consumer(&mut g, consumer2);
@@ -52,23 +56,26 @@ pub fn setup_data(
 pub fn setup_consumer_deps(
     no_of_batch: usize,
     batch_size: usize,
-) -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize) {
+) -> (Graph<i32, TestConsumer>, Vec<Vec<i32>>, usize, Arc<Mutex<Vec<(i32, usize)>>>) {
     let no_of_rec: usize = no_of_batch * batch_size;
     let mut g: Graph<i32, TestConsumer> = Graph::new();
     let handler = g.register_producer();
 
-    let consumer0 = TestConsumer::new(0);
-    let consumer1 = TestConsumer::new(1);
-    let consumer2 = TestConsumer::new(2);
-    handler.register_consumer(&mut g, consumer0);
-    handler.register_consumer(&mut g, consumer1).register_consumer(&mut g, consumer2);
+    let sync_log = Arc::new(Mutex::new(Vec::new()));
+
+    let consumer0 = TestConsumer::new(0, Arc::clone(&sync_log));
+    let consumer1 = TestConsumer::new(1, Arc::clone(&sync_log));
+    let consumer2 = TestConsumer::new(2, Arc::clone(&sync_log));
+
+    handler.register_consumer(&mut g, consumer0).register_consumer(&mut g, consumer1)
+        .register_consumer(&mut g, consumer2);
 
     let mut test_data = Vec::with_capacity(no_of_batch);
     for n in 0..no_of_batch {
         test_data.push(vec![n as i32; batch_size]);
     }
 
-    return (g, test_data, no_of_rec);
+    return (g, test_data, no_of_rec, sync_log);
 }
 
 
